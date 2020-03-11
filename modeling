@@ -9,30 +9,26 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import numpy as np
+import math
 from keras import backend as K
 from keras import Sequential
 from keras.layers import LSTM, Dense, TimeDistributed
+from keras import regularizers
+from keras.layers.convolutional import Conv1D, MaxPooling1D
+from keras.layers.core import Dropout, Activation, Flatten
 from keras.optimizers import Adam
 from keras import callbacks
 from sklearn.preprocessing import MinMaxScaler
-import math
 from sklearn.metrics import mean_squared_error
 import datetime
 import re
-
-from keras import regularizers
-#from keras import initializers
-from keras.layers.convolutional import Conv1D, MaxPooling1D
-from keras.layers.normalization import BatchNormalization
-from keras.layers.core import Dropout, Activation, Flatten
 from tensorflow.python.client import device_lib
 print(device_lib.list_local_devices())
 
-#font 설정
+#Set font
 font_path = "c:\\Windows\Fonts\malgun.ttf"
 font_name=fm.FontProperties(fname=font_path).get_name()
 plt.rcParams['font.family']=font_name
-
 
 def r_squared(y_true, y_pred):
     SS_res =  K.sum(K.square(y_true - y_pred)) 
@@ -48,14 +44,8 @@ def create_dataset(dataset, look_back=1):
         dataY.append(dataset[i + look_back, 0])
     return np.array(dataX), np.array(dataY)
 
-#font 설정
-font_path = "c:\\Windows\Fonts\malgun.ttf"
-font_name=fm.FontProperties(fname=font_path).get_name()
-plt.rcParams['font.family']=font_name
-
 ## Prepare dataset
 dataset = pd.read_excel('ipm_final.xlsx')
-
 dataset=dataset.drop(columns=['O/B', 'I/B'])
 dataset=dataset[(dataset['노출']!=0) & (dataset['클릭']!=0)]
 dataset=dataset.reset_index(drop=True)
@@ -71,7 +61,6 @@ df=df.groupby(['일자'], as_index=False).sum()
 df=df.rename(columns={"일자":"DATE","노출":"SHOW","클릭":"CLICK","비용":"COST","O/B+I/B":"GOAL"})
 df=df.set_index("DATE")
 df=df[:].astype(np.float)
-
 df=df.drop(columns=["SHOW","CLICK","GOAL"])
 
 df.COST.plot()
@@ -89,6 +78,7 @@ FILTERS=50
 scaler = MinMaxScaler(feature_range=(0, 1))
 nptf = scaler.fit_transform(df)
 
+#Split dataset
 train_size = int(len(nptf) * 0.8)
 test_size = len(nptf) - train_size
 train, test = nptf[0:train_size,:], nptf[train_size:len(nptf),:]
@@ -108,7 +98,7 @@ modelNum=now.replace(' ', '')
 
 OPTIM = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=True)
 
-#create and fit the CNN-LSTM network
+#Create and fit the CNN-LSTM network
 model = Sequential()
 model.add(TimeDistributed(Conv1D(filters=FILTERS, kernel_size=5, padding='same', activation=ACTIVATION, kernel_initializer=INITIALIZER, kernel_regularizer=regularizers.l2(0.01)), input_shape=(None,1,1)))
 model.add(TimeDistributed(MaxPooling1D(pool_size=(1), strides=(1))))
@@ -146,6 +136,7 @@ with open(modelNum+".json", "w") as json_file:
 model.save_weights(modelNum+".h5")
 print("Saved model to disk")
 
+#r_squared plot
 print(history.history.keys())
 plt.plot(history.history['r_squared'])
 plt.plot(history.history['val_r_squared'])
@@ -155,6 +146,7 @@ plt.xlabel('epoch')
 plt.legend(['train', 'test'], loc='upper left')
 plt.show()
 
+#loss plot
 print(history.history.keys())
 plt.plot(history.history['loss'])
 plt.plot(history.history['val_loss'])
@@ -206,7 +198,6 @@ testPredictPlot[len(trainPredict)+(look_back*2)+1:len(nptf)-1, :] = testPredict
 
 #plot baseline and predictions
 plt.plot(scaler.inverse_transform(nptf))
-
 plt.plot(trainPredictPlot)
 plt.plot(testPredictPlot)
 plt.show()
