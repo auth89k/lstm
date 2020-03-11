@@ -1,0 +1,224 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Mar  5 16:16:52 2020
+
+@author: cesco-yhkwon
+"""
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+import numpy as np
+from keras import backend as K
+from keras import Sequential
+from keras.layers import LSTM, Dense, TimeDistributed
+from keras.optimizers import Adam
+from keras import callbacks
+from sklearn.preprocessing import MinMaxScaler
+import math
+from sklearn.metrics import mean_squared_error
+import datetime
+import re
+
+from keras import regularizers
+#from keras import initializers
+from keras.layers.convolutional import Conv1D, MaxPooling1D
+from keras.layers.normalization import BatchNormalization
+from keras.layers.core import Dropout, Activation, Flatten
+from tensorflow.python.client import device_lib
+print(device_lib.list_local_devices())
+
+#font 설정
+font_path = "c:\\Windows\Fonts\malgun.ttf"
+font_name=fm.FontProperties(fname=font_path).get_name()
+plt.rcParams['font.family']=font_name
+
+
+def r_squared(y_true, y_pred):
+    SS_res =  K.sum(K.square(y_true - y_pred)) 
+    SS_tot = K.sum(K.square(y_true - K.mean(y_true)))
+
+    return ( 1 - SS_res/(SS_tot + K.epsilon()) )
+
+def create_dataset(dataset, look_back=1):
+    dataX, dataY = [], []
+    for i in range(len(dataset)-look_back-1):
+        a = dataset[i:(i+look_back), 0]
+        dataX.append(a)
+        dataY.append(dataset[i + look_back, 0])
+    return np.array(dataX), np.array(dataY)
+
+#font 설정
+font_path = "c:\\Windows\Fonts\malgun.ttf"
+font_name=fm.FontProperties(fname=font_path).get_name()
+plt.rcParams['font.family']=font_name
+
+## Prepare dataset
+dataset = pd.read_excel('ipm_final.xlsx')
+
+dataset=dataset.drop(columns=['O/B', 'I/B'])
+dataset=dataset[(dataset['노출']!=0) & (dataset['클릭']!=0)]
+dataset=dataset.reset_index(drop=True)
+
+df=dataset
+df["일자"]=df["일자"].astype(str)
+idx=df["일자"].str.contains('2018|2019')
+df=df.loc[idx]
+df=df.drop(columns=['IPM 키워드',"CTR", "CPC", "CPR"])
+df["일자"]=df["일자"].astype('datetime64[ns]')
+
+df=df.groupby(['일자'], as_index=False).sum()
+df=df.rename(columns={"일자":"DATE","노출":"SHOW","클릭":"CLICK","비용":"COST","O/B+I/B":"GOAL"})
+df=df.set_index("DATE")
+df=df[:].astype(np.float)
+
+df=df.drop(columns=["SHOW","CLICK","GOAL"])
+
+df.COST.plot()
+plt.title("검색광고비용")
+plt.show()
+
+SEED=3
+EPOCH = 10000
+BATCH_SIZE = 1
+look_back=1
+ACTIVATION = 'relu'
+INITIALIZER='he_normal'
+FILTERS=50
+
+scaler = MinMaxScaler(feature_range=(0, 1))
+nptf = scaler.fit_transform(df)
+
+train_size = int(len(nptf) * 0.8)
+test_size = len(nptf) - train_size
+train, test = nptf[0:train_size,:], nptf[train_size:len(nptf),:]
+print(len(train), len(test))
+
+# create dataset for learning
+trainX, trainY = create_dataset(train, look_back)
+testX, testY = create_dataset(test, look_back)
+
+# reshape input to be [samples, time steps, features]
+trainX = np.reshape(trainX, (trainX.shape[0], 1, trainX.shape[1],1))
+testX = np.reshape(testX, (testX.shape[0], 1,testX.shape[1],1))
+
+now=str(datetime.datetime.now())
+now=re.sub('[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`\'…》]','',now)
+modelNum=now.replace(' ', '')
+
+OPTIM = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=True)
+
+#create and fit the CNN-LSTM network
+model = Sequential()
+model.add(TimeDistributed(Conv1D(filters=FILTERS, kernel_size=5, padding='same', activation=ACTIVATION, kernel_initializer=INITIALIZER, kernel_regularizer=regularizers.l2(0.01)), input_shape=(None,1,1)))
+model.add(TimeDistributed(MaxPooling1D(pool_size=(1), strides=(1))))
+model.add(TimeDistributed(Flatten()))
+model.add(LSTM(4, batch_input_shape=(BATCH_SIZE, 1, 1)))
+model.add(Dropout(0.2))
+model.add(Dense(1))
+model.add(Activation('linear'))
+model.compile(loss='mean_squared_error', optimizer=OPTIM, metrics=[r_squared])
+model.summary()
+
+#Define e_stop
+e_stop = callbacks.EarlyStopping(monitor='val_loss',min_delta=0, patience=900, verbose=0, mode='auto')
+
+'''
+# set this TensorFlow session as the default session for Keras
+config = tf.ConfigProto()
+# dynamically grow the memory used on the GPU
+config.gpu_options.allow_growth = True
+# to log device placement (on which device the operation ran)
+#config.log_device_placement = True
+sess = tf.Session(config=config)
+K.set_session(sess)
+K.get_session().run(tf.global_variables_initializer())
+
+with K.tf.device('/gpu:0'):
+'''
+history = model.fit(trainX, trainY, batch_size=BATCH_SIZE, epochs=EPOCH, validation_data=(testX, testY), callbacks=[e_stop], verbose=1, shuffle=False)
+
+#Save model
+model_json = model.to_json()
+with open(modelNum+".json", "w") as json_file:
+    json_file.write(model_json)
+#Save weights
+model.save_weights(modelNum+".h5")
+print("Saved model to disk")
+
+print(history.history.keys())
+plt.plot(history.history['r_squared'])
+plt.plot(history.history['val_r_squared'])
+plt.title('model accuracy')
+plt.ylabel('r squared')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+print(history.history.keys())
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+tX=trainX
+tY=trainY
+
+#make predictions
+trainPredict = model.predict(trainX)
+testPredict = model.predict(testX)
+
+#invert predictions
+trainPredict = scaler.inverse_transform(trainPredict)
+tY = tY.reshape([-1,train_size-2])
+tY = scaler.inverse_transform(tY)
+
+#trainY = scaler.inverse_transform([trainY])
+ttY = testY
+testPredict = scaler.inverse_transform(testPredict)
+ttY = scaler.inverse_transform([ttY])
+
+#calculate root mean squared error
+trainScore = math.sqrt(mean_squared_error(tY[0], trainPredict[:,0]))
+print('Train Score: %.2f RMSE' % (trainScore))
+testScore = math.sqrt(mean_squared_error(ttY[0], testPredict[:,0]))
+print('Test Score: %.2f RMSE' % (testScore))
+
+#calculate r-squared
+train_corr = np.corrcoef([tY[0], trainPredict[:,0]])**2
+test_corr = np.corrcoef([ttY[0], testPredict[:,0]])**2
+
+print("train r-sqaured: ",round(train_corr[0][1],4))
+print("test r-sqaured: ",round(test_corr[0][1],4))
+
+#shift train predictions for plotting
+trainPredictPlot = np.empty_like(nptf)
+trainPredictPlot[:, :] = np.nan
+trainPredictPlot[look_back:len(trainPredict)+look_back, :] = trainPredict
+
+#shift test predictions for plotting
+testPredictPlot = np.empty_like(nptf)
+testPredictPlot[:, :] = np.nan
+testPredictPlot[len(trainPredict)+(look_back*2)+1:len(nptf)-1, :] = testPredict
+
+#plot baseline and predictions
+plt.plot(scaler.inverse_transform(nptf))
+
+plt.plot(trainPredictPlot)
+plt.plot(testPredictPlot)
+plt.show()
+
+#plotting
+df_plot=pd.DataFrame(df.values,columns=['ORIGIN'])
+tmp=pd.DataFrame(list(df.index),columns=['DATE'])
+df_plot=pd.merge(df_plot,tmp, how='outer', left_index=True, right_index=True)
+tmp=pd.DataFrame(trainPredictPlot,columns=['TRAIN'])
+df_plot=pd.merge(df_plot,tmp, how='outer', left_index=True, right_index=True)
+tmp=pd.DataFrame(testPredictPlot,columns=['TEST'])
+df_plot=pd.merge(df_plot,tmp, how='outer', left_index=True, right_index=True)
+
+df_plot=df_plot.set_index("DATE")
+df_plot.plot()
